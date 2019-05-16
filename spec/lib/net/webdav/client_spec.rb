@@ -15,7 +15,7 @@ RSpec.describe Net::Webdav::Client do
         expect(client.host).to eq 'https://example.com:5453'
         expect(client.username).to eq 'andy'
         expect(client.password).to eq 'qwerty'
-        expect(client.url).to eq URI.parse('https://example.com:5453/fiz')
+        expect(client.url).to eq 'https://example.com:5453/fiz'
         expect(client.http_auth_types).to eq :basic
       end
     end
@@ -23,14 +23,31 @@ RSpec.describe Net::Webdav::Client do
     context 'when passed credentials' do
       let(:client) { described_class.new('https://example.com:5453/fiz', username: 'andrew', password: 'qwerty') }
 
+      before do
+        stub_request(:head, 'https://example.com:5453/fiz/1.txt').with(basic_auth: ['andrew', 'qwerty']).to_return(status: 204)
+      end
+
       it do
         expect(client.username).to eq 'andrew'
         expect(client.password).to eq 'qwerty'
+        expect(client.file_exists?('/1.txt')).to be_truthy
       end
     end
   end
 
   describe '#file_exists?' do
+    context 'file_path relative' do
+      let(:file_path) { 'system/foo.txt' }
+
+      before do
+        stub_request(:head, "#{server_url}/#{file_path}").to_return(status: 204)
+      end
+
+      it do
+        expect(client.file_exists?(file_path)).to be_truthy
+      end
+    end
+
     context 'when server responds with success' do
       before do
         stub_request(:head, "#{server_url}#{file_path}").to_return(status: 204)
@@ -45,7 +62,7 @@ RSpec.describe Net::Webdav::Client do
       let(:client) { described_class.new(timeout_server, timeout: 1) }
 
       it do
-        expect { client.file_exists?('/system/foo.txt') }.to raise_error Curl::Err::TimeoutError
+        expect { client.file_exists?(file_path) }.to raise_error Timeout::Error
       end
     end
   end
@@ -73,7 +90,7 @@ RSpec.describe Net::Webdav::Client do
       let(:client) { described_class.new(timeout_server, timeout: 1) }
 
       it do
-        expect { client.get_file(file_path, local_file_path) }.to raise_error Curl::Err::TimeoutError
+        expect { client.get_file(file_path, local_file_path) }.to raise_error Timeout::Error
       end
     end
   end
@@ -107,33 +124,7 @@ RSpec.describe Net::Webdav::Client do
       let(:client) { described_class.new(timeout_server, timeout: 1) }
 
       it do
-        expect { client.put_file(file_path, file) }.to raise_error Curl::Err::TimeoutError
-      end
-    end
-
-    context 'when create_path passed' do
-      before { stub_request(:put, "#{server_url}#{file_path}").to_return(status: 201) }
-
-      context 'when directory does not exists' do
-        before do
-          stub_request(:mkcol, "#{server_url}/#{file_path.split('/')[1]}").to_return(status: 201)
-        end
-
-        it do
-          expect(client.put_file(file_path, file, true)).to eq 201
-          expect(a_request(:mkcol, "#{server_url}/#{file_path.split('/')[1]}")).to have_been_made.once
-        end
-      end
-
-      context 'when directory exists' do
-        before do
-          stub_request(:mkcol, "#{server_url}/#{file_path.split('/')[1]}").to_return(status: 405)
-        end
-
-        it do
-          expect(client.put_file(file_path, file, true)).to eq 201
-          expect(a_request(:mkcol, "#{server_url}/#{file_path.split('/')[1]}")).to have_been_made.once
-        end
+        expect { client.put_file(file_path, file) }.to raise_error Timeout::Error
       end
     end
   end
@@ -153,7 +144,7 @@ RSpec.describe Net::Webdav::Client do
       let(:client) { described_class.new(timeout_server, timeout: 1) }
 
       it do
-        expect { client.delete_file(file_path) }.to raise_error Curl::Err::TimeoutError
+        expect { client.delete_file(file_path) }.to raise_error Timeout::Error
       end
     end
 
@@ -171,18 +162,6 @@ RSpec.describe Net::Webdav::Client do
       before { stub_request(:delete, "#{server_url}#{file_path}").to_return(status: 200) }
 
       it { expect { client.delete_file(file_path) }.to raise_error ArgumentError }
-    end
-  end
-
-  describe '#make_directory' do
-    context 'when MKCOL' do
-      before do
-        stub_request(:mkcol, "#{server_url}#{file_path}").to_return(status: 200)
-      end
-
-      it do
-        expect(client.make_directory(file_path)).to be_a Curl::Easy
-      end
     end
   end
 end

@@ -17,7 +17,7 @@ Gem::Specification.new do |gem|
   gem.test_files    = gem.files.grep(%r{^(test|spec|features)/})
   gem.require_paths = ["lib"]
 
-  gem.add_dependency "curb", ">= 0.7"
+  gem.add_dependency "httparty", ">= 0.14.0"
 
   gem.add_development_dependency "rspec"
   gem.add_development_dependency "rake"

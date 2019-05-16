@@ -1,10 +1,11 @@
 require 'uri'
-require 'curb'
+require 'httparty'
 
 module Net
   module Webdav
     class Client
-      # Public: maximum time to execution of request in seconds
+      include HTTParty
+
       MAX_TIMEOUT = 30
 
       attr_reader :host, :username, :password, :url, :http_auth_types, :timeout
@@ -22,8 +23,7 @@ module Net
           @password = options[:password]
         end
 
-        @url = URI.join(@host, uri.path)
-
+        @url = URI.join(@host, uri.path).to_s
         @timeout = options.fetch(:timeout, MAX_TIMEOUT)
       end
 
@@ -33,10 +33,8 @@ module Net
       #
       # Returns: Boolean
       def file_exists?(path)
-        connection = curl(path)
-        connection.http_head
-
-        connection.response_code >= 200 && connection.response_code < 300
+        response = self.class.head(File.join('/', path), request_options)
+        response.code >= 200 && response.code < 300
       end
 
       # Public: GET file, saves path to local_file_path
@@ -46,16 +44,15 @@ module Net
       #
       # Returns: nothing
       def get_file(path, local_file_path)
-        file = output_file(local_file_path)
-
-        connection = curl(path)
-        connection.perform
-
-        notify_of_error(connection, "getting file. #{path}") if connection.response_code != 200
-
-        file.write(connection.body_str)
-      ensure
-        file.close
+        path = File.join('/', path)
+        response = nil
+        File.open(local_file_path, "w") do |file|
+          file.binmode if file.respond_to?(:binmode)
+          response = self.class.get(path, request_options.merge!(stream_body: true)) do |fragment|
+            file.write(fragment)
+          end
+        end
+        notify_of_error(response, "getting file. #{path}") if response && response.code != 200
       end
 
       # Public: PUT file
@@ -66,97 +63,54 @@ module Net
       #
       # Returns Fixnum, status code, 201 || 204, if success
       def put_file(path, file, create_path = false)
-        connection = curl(path)
+        path = File.join('/', path)
+        response = self.class.put(path, request_options.merge!(
+          body_stream: file,
+          headers: {
+            'Content-Length' => file.size.to_s
+          }
+        ))
 
-        if create_path
-          uri = URI.parse(full_url(path))
-          path_parts = uri.path.split('/').reject { |s| s.to_s.empty? }
-          path_parts.pop
-
-          for i in 0..(path_parts.length - 1)
-            # if the part part is for a file with an extension skip
-            next unless File.extname(path_parts[i]).empty?
-
-            parent_path = path_parts[0..i].join('/')
-            url = URI.join(
-              "#{uri.scheme}://#{uri.host}#{(uri.port.nil? || uri.port == 80) ? "" : ":#{uri.port}"}/", parent_path
-            )
-
-            connection.url = full_url(url)
-            connection.http(:MKCOL)
-
-            notify_of_error(connection, "creating directories") unless [201, 204, 405].include?(connection.response_code)
-
-            # 201 Created or 405 Conflict (already exists)
-            return connection.response_code if connection.response_code != 201 && connection.response_code != 405
-          end
+        if response.code != 201 && response.code != 204
+          notify_of_error(response, "creating(putting) file. File path: #{path}")
         end
 
-        connection.url = full_url(path)
-        connection.http_put(file)
-
-        if connection.response_code != 201 && connection.response_code != 204
-          notify_of_error(connection, "creating(putting) file. File path: #{path}")
-        end
-
-        connection.response_code
+        response.code
       end
 
       # Public: DELETE file by path
       #
       # path - String, path to file on server
       #
-      # Throws Curl::Err
-      #
       # Returns Boolean, always true
       def delete_file(path)
-        curl(path).http_delete
-      end
-
-      # Public: MKCOL make directory on server
-      #
-      # path - String, path to directory on server
-      #
-      # Returns Curl::Easy
-      def make_directory(path)
-        connection = curl(path)
-        connection.http(:MKCOL)
-        connection
+        path = File.join('/', path)
+        raise ArgumentError if path == '/'
+        self.class.delete(path, request_options)
       end
 
       private
 
-      def curl(uri)
-        raise ArgumentError, "Wrong path #{uri}" if uri.to_s.empty? || uri.to_s == '/'.freeze
-
-        connection = ::Curl::Easy.new
-        connection.url = full_url(uri)
-        connection.http_auth_types = http_auth_types if http_auth_types
-        connection.userpwd = curl_credentials if username && password
-        connection.timeout = timeout
-
-        connection
+      def request_options
+        options = {
+          base_uri: @url,
+          timeout: @timeout
+        }
+        case http_auth_types
+        when :basic
+          if username && password
+            options[:basic_auth] = {username: username, password: password}
+          end
+        end
+        options
       end
 
-      def notify_of_error(connection, action)
-        raise "Error in WEBDav Client while #{action} with error: #{connection.status}"
-      end
-
-      def curl_credentials
-        "#{@username}:#{@password}"
+      def notify_of_error(response, action)
+        raise "Error in WEBDav Client while #{action} with error: #{response.code}"
       end
 
       def full_url(path)
         URI.join(@url, path).to_s
-      end
-
-      def output_file(filename)
-        if filename.is_a? IO
-          filename.binmode if filename.respond_to?(:binmode)
-          filename
-        else
-          File.open(filename, 'wb')
-        end
       end
     end
   end
